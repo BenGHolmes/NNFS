@@ -15,8 +15,7 @@ class Net:
         self._layers = layers
         self._activations = activations
             
-        weights, biases = init_NN_Glorot(layers, activations, uniform=uniform)
-        print(weights, biases)
+        weights, biases = init_NN_Glorot(layers, [squared_error, squared_error, squared_error], uniform=uniform)
         self._weights = weights
         self._biases = biases
 
@@ -28,25 +27,34 @@ class Net:
             X (np.array): Input vector to the network with dimensions (batch_size, input_size, 1)
 
         Returns:
+            a (list): List of activations for each layer
+            z (list): List of weighted inputs for each layer
             y (np.array): Output vector of size (batch_size, output_size, 1)
         """
         y = X.copy()
+        a = [X.copy()]
+        z = []
+
         for l in range(self._L - 1):
             # Feed forward into weights and add biases
             y = np.einsum('spj, np -> snj', y, self._weights[l]) + self._biases[l]
+            z.append(y.copy())        
 
             # Pass through activation function
             y = self._activations[l](y)
+            a.append(y.copy())
 
-        return y
+        return a, z, y
 
 
-    def backprop(self, X_batch, y_batch, out_batch, loss_func):
+    def backprop(self, X_batch, y_batch, a_batch, z_batch, out_batch, loss_func):
         """Return the gradients after running back propogation on a batch of inputs.
         
         Args:
             X_batch (ndarray): Array of shape (batch_size, input_size, 1)
             y_batch (ndarray): Array of shape (batch_size, output_size, 1)
+            a_batch (list): List of activations for each layer.
+            z_batch (list): List of weighted inputs for each layer.
             out_batch (ndarray): Predicted y from the network. Same shape as y_batch.
             loss_func (function): Function used to calculate loss.
        
@@ -55,26 +63,59 @@ class Net:
         """
         loss = loss_func(out_batch, y_batch)
         
+        # Compute grads for last layer
+        dC_da = loss_func(out_batch, y_batch, derivative=True)
+        act_prime = self._activations[-1](z_batch[-1], derivative=True)
+        delta_L = np.einsum('sij, sij -> sij', dC_da, act_prime)
+
+        b_grads = [delta_L]
+        w_grads = [np.einsum('sik,sjk -> sij', delta_L, a_batch[-2])]
+
+        # Compute grads for other layers
+        for l in range(2, self._L):
+            act_prime = self._activations[-l](z_batch[-l], derivative=True)
+
+            wT_delt = np.einsum('ij,sjk -> sik', self._weights[-l+1].T, b_grads[-1])
+            delta_l = np.einsum('sij, sij -> sij', wT_delt, act_prime)
+            b_grads.append(delta_l)
+            w_grads.append(np.einsum('sik,sjk -> sij', delta_l, a_batch[-l-1]))
+
+        # Reverse grad arrays and average for the batch
+        avg_b_grads = [b.mean(axis=0) for b in reversed(b_grads)]
+        avg_w_grads = [w.mean(axis=0) for w in reversed(w_grads)]
+
+        return loss, (avg_w_grads, avg_b_grads)
 
 
-
-    def train(self, X_train, y_train, epochs, loss_func, lr=0.01):
+    def train(self, X_train, y_train, X_test, y_test, epochs, loss_func, lr=0.01):
         """Perform back propogation and train the network
 
         Args:
-            X_train (ndarray): Array of shape (n_batches, batch_size, input_size, 1)
-            y_train (ndarray): Array of shape (n_batches, batch_size, output_size, 1)
+            X_train (ndarray): Train input. Array of shape (n_batches, batch_size, input_size, 1)
+            y_train (ndarray): Train targets. Array of shape (n_batches, batch_size, output_size, 1)
+            X_test (ndarray): Test input. Array of shape (n_samples, input_size, 1)
+            y_tet (ndarray): Test targets. Array of shape (n_samples, batch_size, output_size, 1)
             epochs (int): Number of epochs to train for.
             loss_func (function): Function used to calculate loss.
             lr (float): Learning rate.
-
-        TODO:
-            Me
         """
         for e in range(epochs):
+            train_loss = 0
             for b in range(len(X_train)):
-                out_batch = self.forward(X_train[b])
-                loss, grads = self.backprop(X_train[b], y_train[b], out_batch, loss_func)
+                a_batch, z_batch, out_batch = self.forward(X_train[b])
+                batch_loss, (w_grads, b_grads) = self.backprop(X_train[b], y_train[b], a_batch, z_batch, out_batch, loss_func)
+                train_loss = batch_loss
+
+                for i, w in enumerate(self._weights):
+                    w -= (w_grads[i] * lr)
+
+                for i, b in enumerate(self._biases):
+                    b -= (b_grads[i] * lr)
+
+            if e % 100 == 99:
+                _, _, test_pred = self.forward(X_test)
+                test_loss = loss_func(test_pred, y_test)
+                print(f'Epoch: {e+1}, Train loss: {train_loss.mean()}, Test loss: {test_loss.mean()}')
 
 
 ########################
@@ -112,9 +153,12 @@ def relu(x, derivative=False):
 ##################
 # Loss Functions #
 ##################
-def rmse(y_pred, y_true):
-    """Return the root, mean, squared error of y_pred relative to y_true"""
-    return np.sqrt(np.mean((y_pred - y_true)**2))
+def squared_error(y, t, derivative=False):
+    """Return squared error, or if derivative is true, the derivative of squared error"""
+    if derivative:
+        return 2*(y-t)
+    else:
+        return (y-t)**2
 
 
 ############################
