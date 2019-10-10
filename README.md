@@ -15,7 +15,7 @@ The user also specifies a list of `N-1` activation functions for all but the inp
 ```
 A = [sigmoid, sigmoid, relu]
 ```
-Sigmoid and ReLU are defined by default, but more can be added as long as they follow the same format as sigmoid and ReLU.
+Sigmoid, tanh, and ReLU are defined by default, but more can be added as long as they follow the same format as sigmoid and ReLU.
 
 ## Forward Pass
 
